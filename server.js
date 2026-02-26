@@ -6,34 +6,27 @@ require("dotenv").config();
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const DOMAIN = process.env.DOMAIN;
 
+if (!BOT_TOKEN || !DOMAIN) {
+  console.error("❌ Thiếu BOT_TOKEN hoặc DOMAIN trong ENV");
+  process.exit(1);
+}
+
 const app = express();
 const bot = new Telegraf(BOT_TOKEN);
 
-const fileCache = new Map();
-
 // ================= BOT =================
 bot.start((ctx) => {
-  ctx.reply("📥 Gửi video (.mp4), tôi sẽ trả link ẩn token.");
+  ctx.reply("📥 Gửi video (.mp4), tôi sẽ trả link tải trực tiếp.");
 });
 
 bot.on("video", async (ctx) => {
   try {
     const fileId = ctx.message.video.file_id;
 
-    const res = await axios.get(
-      `https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`
-    );
+    // Tạo link có đuôi .mp4
+    const safeLink = `${DOMAIN}/video/${fileId}.mp4`;
 
-    const filePath = res.data.result.file_path;
-
-    if (!filePath.endsWith(".mp4")) {
-      return ctx.reply("❌ Video không phải .mp4");
-    }
-
-    fileCache.set(fileId, filePath);
-
-    const safeLink = `${DOMAIN}/video/${fileId}`;
-    ctx.reply("✅ Link MP4:\n" + safeLink);
+    await ctx.reply("✅ Link MP4:\n" + safeLink);
 
   } catch (err) {
     console.log(err);
@@ -41,14 +34,24 @@ bot.on("video", async (ctx) => {
   }
 });
 
-// ================= API STREAM =================
-app.get("/video/:id", async (req, res) => {
+// ================= STREAM VIDEO =================
+app.get("/video/:id.mp4", async (req, res) => {
   try {
     const fileId = req.params.id;
-    const filePath = fileCache.get(fileId);
 
-    if (!filePath) {
-      return res.status(404).send("File không tồn tại hoặc đã hết hạn");
+    // Lấy file_path từ Telegram mỗi lần mở link
+    const tgRes = await axios.get(
+      `https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`
+    );
+
+    if (!tgRes.data.ok) {
+      return res.status(404).send("File not found");
+    }
+
+    const filePath = tgRes.data.result.file_path;
+
+    if (!filePath.endsWith(".mp4")) {
+      return res.status(400).send("Not mp4 file");
     }
 
     const telegramUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
@@ -60,14 +63,17 @@ app.get("/video/:id", async (req, res) => {
     });
 
     res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", `inline; filename="${fileId}.mp4"`);
+
     response.data.pipe(res);
 
   } catch (err) {
-    res.status(500).send("Server error");
+    console.log(err.message);
+    res.status(404).send("File not found");
   }
 });
 
-// ================= START =================
+// ================= START SERVER =================
 const PORT = process.env.PORT || 3000;
 
 bot.launch();
